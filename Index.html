@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filler Ultra – Accessibility Edition</title>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <style>
+        :root { --bg: #000000; --card: #1a1a1a; --text: #ffffff; --accent: #ffffff; --p1: #00ff00; --p2: #ff0000; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); font-family: sans-serif; color: var(--text); display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        
+        #menu { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; }
+        .menu-card { background: var(--card); padding: 2rem; border-radius: 12px; text-align: center; width: 300px; border: 2px solid #333; }
+        
+        #gameArea { display: none; flex-direction: column; align-items: center; justify-content: space-evenly; width: 100vw; height: 100vh; }
+        
+        #grid { 
+            display: grid; 
+            gap: 1px; 
+            background: #444; 
+            border: 4px solid #fff; 
+            width: 82vmin; 
+            height: 82vmin; 
+        }
+        
+        .cell { 
+            width: 100%; height: 100%; position: relative; 
+            display: flex; align-items: center; justify-content: center; 
+            font-size: 10px; font-weight: bold; color: rgba(255,255,255,0.7);
+        }
+        .owned-p1 { outline: 3px solid var(--p1); z-index: 5; box-shadow: 0 0 10px var(--p1); }
+        .owned-p2 { outline: 3px solid var(--p2); z-index: 5; box-shadow: 0 0 10px var(--p2); }
+        
+        .palette { display: flex; gap: 10px; justify-content: center; }
+        .palette button { 
+            width: 12vmin; height: 12vmin; max-width: 60px; max-height: 60px; 
+            border-radius: 4px; border: 2px solid #fff; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.2rem; font-weight: 900; color: white; text-shadow: 1px 1px 2px #000;
+        }
+        .palette button:disabled { opacity: 0.1; filter: grayscale(1); }
+
+        .powerup-btn { padding: 8px 12px; border: 2px solid #fff; background: transparent; color: #fff; font-weight: bold; cursor: pointer; margin: 0 5px; }
+        .powerup-btn:disabled { opacity: 0.2; }
+
+        .hotzone { background-image: radial-gradient(circle, #fff 20%, transparent 80%); animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+        #victoryOverlay { 
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95); 
+            flex-direction: column; align-items: center; justify-content: center; z-index: 100;
+        }
+        
+        button.primary { padding: 12px; background: #fff; color: #000; font-weight: bold; cursor: pointer; width: 100%; margin: 5px 0; border: none; }
+        input { padding: 12px; width: 80%; background: #222; color: #fff; text-align: center; border: 1px solid #fff; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+<div id="victoryOverlay">
+    <h1 id="victoryText" style="font-size: 4rem;">WINNER</h1>
+    <button class="primary" style="width: 200px;" onclick="resetGame()">PLAY AGAIN</button>
+</div>
+
+<div id="menu">
+    <div class="menu-card">
+        <h1>FILLER</h1>
+        <button class="primary" onclick="startSinglePlayer()">SOLO VS BOT</button>
+        <hr style="margin: 20px 0; border-color: #333;">
+        <button class="primary" onclick="createOnlineGame()">CREATE ONLINE</button>
+        <input id="codeInput" placeholder="CODE" maxlength="5">
+        <button class="primary" onclick="joinOnlineGame()">JOIN ONLINE</button>
+    </div>
+</div>
+
+<div id="gameArea">
+    <div style="text-align: center;">
+        <div id="gameHeader" style="font-weight: bold;">MODE</div>
+        <div style="margin-top: 5px;">
+            <button id="btnChaos" class="powerup-btn" onclick="usePower('chaos')" disabled>CHAOS (0)</button>
+            <button id="btnMud" class="powerup-btn" onclick="usePower('mud')" disabled>MUD (0)</button>
+        </div>
+    </div>
+
+    <div id="grid"></div>
+
+    <div class="controls">
+        <div style="display: flex; gap: 50px; font-weight: bold; margin-bottom: 10px; font-size: 1.2rem;">
+            <span style="color: var(--p1)">P1: <span id="p1Score">0</span></span>
+            <span style="color: var(--p2)">P2: <span id="p2Score">0</span></span>
+        </div>
+        <div class="palette" id="palette"></div>
+    </div>
+</div>
+
+<script>
+// --- CONFIG ---
+const firebaseConfig = {
+    apiKey: "AIzaSyB4114xQshijIMW2yBioIuZdgN6Vpo3k3U",
+    authDomain: "filler-xl.firebaseapp.com",
+    projectId: "filler-xl",
+    storageBucket: "filler-xl.firebasestorage.app",
+    messagingSenderId: "613837258322",
+    appId: "1:613837258322:web:21f4a1050a22cafe28698b",
+    measurementId: "G-TYKQDC906H"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+const SIZE = 20;
+// RED, GREEN, BLUE, YELLOW, BLACK
+const COLORS = ["#ff0000", "#00ff00", "#00aaff", "#ffff00", "#1a1a1a"];
+const LABELS = ["R", "G", "B", "Y", "K"];
+
+let gameId, player, gameRef, state, isBotMode = false;
+
+/* --- MODES --- */
+function startSinglePlayer() { isBotMode = true; player = "p1"; state = generateInitialState(); showGame(); }
+function createOnlineGame() { isBotMode = false; gameId = Math.random().toString(36).substr(2, 5).toUpperCase(); player = "p1"; db.ref("games/"+gameId).set(generateInitialState()).then(connectToGame); }
+function joinOnlineGame() { isBotMode = false; gameId = document.getElementById("codeInput").value.trim().toUpperCase(); player = "p2"; db.ref("games/"+gameId).once("value", snap => snap.exists() ? connectToGame() : alert("Bad Code")); }
+function connectToGame() { gameRef = db.ref("games/" + gameId); gameRef.on("value", snap => { state = snap.val(); if(state) showGame(); }); }
+function showGame() { document.getElementById("menu").style.display = "none"; document.getElementById("gameArea").style.display = "flex"; render(); }
+
+function generateInitialState() {
+    const grid = []; const specials = {};
+    for (let r = 0; r < SIZE; r++) {
+        grid[r] = [];
+        for (let c = 0; c < SIZE; c++) {
+            let opts = [0,1,2,3,4]; // Only 5 colors
+            if (r > 0) opts = opts.filter(i => i !== grid[r-1][c]);
+            if (c > 0) opts = opts.filter(i => i !== grid[r][c-1]);
+            grid[r][c] = opts[Math.floor(Math.random() * opts.length)];
+        }
+    }
+    for (let i = 0; i < 6; i++) specials[`${Math.floor(Math.random()*8)+6},${Math.floor(Math.random()*8)+6}`] = { type: 'hotzone' };
+    return { grid, specials, owners: { "0,0": "p1", [`${SIZE-1},${SIZE-1}`]: "p2" }, colors: { p1: grid[0][0], p2: grid[SIZE-1][SIZE-1] }, inventory: { p1: { chaos: 0, mud: 0 }, p2: { chaos: 0, mud: 0 } }, turn: "p1" };
+}
+
+function resetGame() {
+    document.getElementById("victoryOverlay").style.display = "none";
+    const ns = generateInitialState();
+    if (isBotMode) { state = ns; render(); } else { gameRef.set(ns); }
+}
+
+function makeMove(colorIndex) {
+    if (state.turn !== player) return;
+    state.colors[player] = colorIndex;
+    processExpansion(state, player, colorIndex);
+    state.turn = (player === "p1") ? "p2" : "p1";
+    if (isBotMode) { render(); setTimeout(botMove, 500); } else { gameRef.set(state); }
+}
+
+function botMove() {
+    let best = -1, maxGain = -1;
+    COLORS.forEach((_, i) => {
+        if (i === state.colors.p1 || i === state.colors.p2) return;
+        const ts = JSON.parse(JSON.stringify(state));
+        const start = Object.keys(ts.owners).length;
+        processExpansion(ts, "p2", i);
+        const gain = Object.keys(ts.owners).length - start;
+        if (gain > maxGain) { maxGain = gain; best = i; }
+    });
+    state.colors.p2 = best; processExpansion(state, "p2", best); state.turn = "p1"; render();
+}
+
+function processExpansion(gs, pID, colorIdx) {
+    const queue = []; const visited = new Set();
+    for (const k in gs.owners) if (gs.owners[k] === pID) queue.push(k.split(",").map(Number));
+    while (queue.length) {
+        const [r, c] = queue.shift(); const key = `${r},${c}`;
+        if (visited.has(key)) continue; visited.add(key);
+        if (gs.specials[key] && gs.specials[key].type === 'mud') { delete gs.specials[key]; continue; }
+        gs.grid[r][c] = colorIdx; gs.owners[key] = pID;
+        if (gs.specials[key] && gs.specials[key].type === 'hotzone') {
+            const itm = Math.random() > 0.5 ? 'chaos' : 'mud';
+            gs.inventory[pID][itm]++; delete gs.specials[key];
+        }
+        [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dr, dc]) => {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && (gs.grid[nr][nc] === colorIdx || gs.owners[`${nr},${nc}`] === pID)) queue.push([nr, nc]);
+        });
+    }
+}
+
+function usePower(type) {
+    if (state.inventory[player][type] > 0) {
+        state.inventory[player][type]--;
+        if (type === 'chaos') {
+            for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) 
+                if (!state.owners[`${r},${c}`]) state.grid[r][c] = Math.floor(Math.random() * COLORS.length);
+        }
+        if (type === 'mud') {
+            const r = player === 'p1' ? 8 : 12;
+            for(let i=0; i<4; i++) state.specials[`${r},${8+i}`] = { type: 'mud' };
+        }
+        if (isBotMode) render(); else gameRef.set(state);
+    }
+}
+
+function render() {
+    const p1Count = Object.values(state.owners).filter(v => v === 'p1').length;
+    const p2Count = Object.values(state.owners).filter(v => v === 'p2').length;
+    document.getElementById("p1Score").textContent = p1Count;
+    document.getElementById("p2Score").textContent = p2Count;
+    
+    if (p1Count + p2Count === SIZE * SIZE) {
+        document.getElementById("victoryOverlay").style.display = "flex";
+        document.getElementById("victoryText").textContent = (p1Count > p2Count ? "P1 WINS" : "P2 WINS");
+        document.getElementById("victoryText").style.color = (p1Count > p2Count ? "var(--p1)" : "var(--p2)");
+    }
+
+    const isMyTurn = state.turn === player;
+    document.getElementById("gameHeader").textContent = isBotMode ? "SOLO" : "ONLINE";
+    document.getElementById("gameHeader").style.color = isMyTurn ? "#0f0" : "#666";
+    
+    const inv = state.inventory[player];
+    document.getElementById("btnChaos").textContent = `CHAOS (${inv.chaos})`;
+    document.getElementById("btnChaos").disabled = (!isMyTurn || inv.chaos <= 0);
+    document.getElementById("btnMud").textContent = `MUD (${inv.mud})`;
+    document.getElementById("btnMud").disabled = (!isMyTurn || inv.mud <= 0);
+
+    const gridDiv = document.getElementById("grid");
+    gridDiv.style.gridTemplateColumns = `repeat(${SIZE}, 1fr)`;
+    gridDiv.innerHTML = "";
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            const cell = document.createElement("div"); cell.className = "cell";
+            const colorIdx = state.grid[r][c];
+            cell.style.background = COLORS[colorIdx];
+            cell.textContent = LABELS[colorIdx];
+            
+            const spec = state.specials[`${r},${c}`];
+            if (spec) {
+                if (spec.type === 'hotzone') cell.classList.add('hotzone');
+                if (spec.type === 'mud') cell.classList.add('mud-tile');
+            }
+            if (state.owners[`${r},${c}`]) cell.classList.add(state.owners[`${r},${c}`] === 'p1' ? 'owned-p1' : 'owned-p2');
+            gridDiv.appendChild(cell);
+        }
+    }
+
+    const pal = document.getElementById("palette"); pal.innerHTML = "";
+    COLORS.forEach((color, i) => {
+        const btn = document.createElement("button"); 
+        btn.style.background = color;
+        btn.textContent = LABELS[i];
+        btn.disabled = (!isMyTurn || i === state.colors.p1 || i === state.colors.p2);
+        btn.onclick = () => makeMove(i); 
+        pal.appendChild(btn);
+    });
+}
+</script>
+</body>
+</html>
